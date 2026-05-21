@@ -1,0 +1,5 @@
+server_addr = "0.0.0.0:443"
+api_keys = ["your-secure-api-key"]
+cert_path = "certs/cert.pem"
+key_path = "certs/key.pem"
+heartbeat_interval_secs = 30

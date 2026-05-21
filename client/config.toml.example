@@ -1,0 +1,3 @@
+server_url = "wss://localhost:443/ws"
+api_key = "your-secure-api-key"
+agent_id = "agent-unique-id"
