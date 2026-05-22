@@ -9,10 +9,17 @@ pub enum Message {
     Heartbeat(Heartbeat),
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandType {
+    SystemInfo,
+    Reboot,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CommandRequest {
     pub request_id: Uuid,
-    pub command: String,
+    pub command: CommandType,
     pub payload: serde_json::Value,
 }
 
@@ -63,7 +70,7 @@ mod tests {
     fn test_message_serialization() {
         let req = Message::Command(CommandRequest {
             request_id: Uuid::new_v4(),
-            command: "systeminfo".to_string(),
+            command: CommandType::SystemInfo,
             payload: json!({}),
         });
 
@@ -71,7 +78,7 @@ mod tests {
         let de: Message = serde_json::from_str(&json).unwrap();
 
         if let Message::Command(c) = de {
-            assert_eq!(c.command, "systeminfo");
+            assert_eq!(c.command, CommandType::SystemInfo);
         } else {
             panic!("Wrong message type");
         }

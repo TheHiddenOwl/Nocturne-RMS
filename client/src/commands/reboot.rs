@@ -1,14 +1,16 @@
 use async_trait::async_trait;
+use protocol::models::CommandType;
 use serde_json::{json, Value};
 use crate::commands::Command;
+#[cfg(target_os = "windows")]
 use std::process::Command as StdCommand;
 
 pub struct RebootCommand;
 
 #[async_trait]
 impl Command for RebootCommand {
-    fn name(&self) -> &str {
-        "reboot"
+    fn command_type(&self) -> CommandType {
+        CommandType::Reboot
     }
 
     async fn execute(&self, _payload: Value) -> anyhow::Result<Value> {
