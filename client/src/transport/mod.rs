@@ -81,18 +81,45 @@ impl Client {
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
         // Send task
-        let mut send_task = tokio::spawn(async move {
+        let send_task = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let json = serde_json::to_string(&msg).unwrap();
+                let json = match serde_json::to_string(&msg) {
+                    Ok(j) => j,
+                    Err(_) => continue,
+                };
                 if sender.send(tokio_tungstenite::tungstenite::Message::Text(json)).await.is_err() {
                     break;
+                }
+            }
+            // Flush remaining messages
+            let mut flush_interval = tokio::time::interval(Duration::from_millis(100));
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(30) {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if sender.send(tokio_tungstenite::tungstenite::Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        flush_interval.tick().await;
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => break,
                 }
             }
         });
 
         // Handle incoming messages
         while let Some(msg) = receiver.next().await {
-            let msg = msg?;
+            let msg = match msg {
+                Ok(m) => m,
+                Err(e) => {
+                    log::error!("WebSocket error: {:?}", e);
+                    break;
+                }
+            };
             if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
                 if let Ok(protocol_msg) = serde_json::from_str::<Message>(&text) {
                     match protocol_msg {
@@ -127,7 +154,9 @@ impl Client {
             }
         }
 
-        send_task.abort();
+        // Give send task a chance to flush
+        drop(tx);
+        let _ = tokio::time::timeout(Duration::from_secs(31), send_task).await;
         Ok(())
     }
 }

@@ -1,4 +1,5 @@
 use std::time::Duration;
+use rand::Rng;
 
 pub struct ReconnectStrategy {
     base_delay: Duration,
@@ -16,7 +17,10 @@ impl ReconnectStrategy {
     }
 
     pub fn next_delay(&mut self) -> Duration {
-        let delay = self.current_delay;
+        let mut rng = rand::thread_rng();
+        let jitter = rng.gen_range(0..1000);
+        let delay = self.current_delay + Duration::from_millis(jitter);
+
         self.current_delay = (self.current_delay * 2).min(self.max_delay);
         delay
     }

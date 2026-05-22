@@ -15,11 +15,11 @@ use axum::{
     },
     middleware,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use protocol::{models::{Message, Heartbeat}, API_KEY_HEADER, AGENT_ID_HEADER};
+use protocol::{models::{Message, Heartbeat}, AGENT_ID_HEADER};
 use websocket::SessionManager;
 use tokio::sync::mpsc;
 use futures_util::{StreamExt, SinkExt};
@@ -34,7 +34,7 @@ pub struct Config {
     pub heartbeat_interval_secs: u64,
 }
 
-struct AppState {
+pub struct AppState {
     session_manager: Arc<SessionManager>,
     config: Config,
 }
@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/api/agents/:agent_id/command", post(api::send_command))
         .layer(middleware::from_fn_with_state(state.clone(), |state: State<Arc<AppState>>, req, next| {
             auth::auth_middleware(req, next, state.config.api_keys.clone())
         }))
@@ -113,7 +114,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, agent_id: String
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
-    state.session_manager.add_session(agent_id.clone(), tx);
+    if let Err(e) = state.session_manager.add_session(agent_id.clone(), tx.clone()) {
+        log::error!("Failed to add session for {}: {:?}", agent_id, e);
+        return;
+    }
 
     // Send loop
     let mut send_task = tokio::spawn(async move {
@@ -124,6 +128,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, agent_id: String
             };
             if sender.send(WsMessage::Text(json)).await.is_err() {
                 break;
+            }
+        }
+        // Attempt to flush remaining messages before closing
+        let mut flush_timeout = tokio::time::interval(Duration::from_millis(100));
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(30) {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        if sender.send(WsMessage::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    flush_timeout.tick().await;
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
             }
         }
     });
@@ -138,11 +160,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, agent_id: String
                     match protocol_msg {
                         Message::Response(resp) => {
                             log::info!("Received response from {}: {:?}", agent_id_recv, resp);
+                            let _ = session_manager_recv.handle_response(resp);
                         }
                         Message::Heartbeat(hb) => {
                             let now = chrono::Utc::now().timestamp_millis();
                             let latency = (now - hb.timestamp) as u64;
-                            session_manager_recv.update_activity(&agent_id_recv, Some(latency));
+                            let _ = session_manager_recv.update_activity(&agent_id_recv, Some(latency));
                         }
                         _ => {}
                     }
@@ -152,37 +175,41 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, agent_id: String
     });
 
     // Heartbeat loop
-    let session_manager_hb = state.session_manager.clone();
-    let agent_id_hb = agent_id.clone();
+    let tx_hb = tx.clone();
     let hb_interval = state.config.heartbeat_interval_secs;
 
-    let mut hb_task = tokio::spawn(async move {
+    let hb_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(hb_interval));
         loop {
             interval.tick().await;
-            let tx = {
-                let sessions = session_manager_hb.sessions.read().unwrap();
-                sessions.get(&agent_id_hb).map(|s| s.tx.clone())
-            };
-
-            if let Some(tx) = tx {
-                let hb = Message::Heartbeat(Heartbeat {
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                });
-                if tx.send(hb).is_err() {
-                    break;
-                }
-            } else {
+            let hb = Message::Heartbeat(Heartbeat {
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            });
+            if tx_hb.send(hb).is_err() {
                 break;
             }
         }
     });
 
     tokio::select! {
-        _ = (&mut send_task) => { recv_task.abort(); hb_task.abort(); }
-        _ = (&mut recv_task) => { send_task.abort(); hb_task.abort(); }
+        res = (&mut send_task) => {
+            if let Err(e) = res {
+                log::error!("Send task for {} failed: {:?}", agent_id, e);
+            }
+            recv_task.abort();
+            hb_task.abort();
+        }
+        res = (&mut recv_task) => {
+            if let Err(e) = res {
+                log::error!("Receive task for {} failed: {:?}", agent_id, e);
+            }
+            // Give send task a chance to flush
+            drop(tx);
+            let _ = tokio::time::timeout(Duration::from_secs(31), send_task).await;
+            hb_task.abort();
+        }
     }
 
-    state.session_manager.remove_session(&agent_id);
+    let _ = state.session_manager.remove_session(&agent_id);
     log::info!("Client disconnected: {}", agent_id);
 }
