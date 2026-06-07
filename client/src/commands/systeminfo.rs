@@ -93,6 +93,15 @@ impl Command for SystemInfoCommand {
                 }
             }
         }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(output) = std::process::Command::new("hostname").arg("-d").output() {
+                let domain = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !domain.is_empty() {
+                    domain_name = domain;
+                }
+            }
+        }
 
         let info = SystemInfo {
             hostname,

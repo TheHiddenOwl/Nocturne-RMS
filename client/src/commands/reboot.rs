@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use protocol::models::CommandType;
 use serde_json::{json, Value};
 use crate::commands::Command;
-#[cfg(target_os = "windows")]
 use std::process::Command as StdCommand;
 
 pub struct RebootCommand;
@@ -24,7 +23,10 @@ impl Command for RebootCommand {
 
         #[cfg(not(target_os = "windows"))]
         {
-            log::info!("Reboot command received, but not on Windows. Skipping actual reboot.");
+            log::info!("Reboot triggered. Executing shutdown -r now");
+            StdCommand::new("shutdown")
+                .args(["-r", "now"])
+                .spawn()?;
         }
 
         Ok(json!({"status": "reboot_initiated"}))

@@ -48,6 +48,11 @@ impl SessionManager {
 
     pub fn add_session(&self, agent_id: String, tx: mpsc::UnboundedSender<Message>) -> Result<(), SessionError> {
         let mut sessions = self.sessions.write()?;
+        // Evict existing session with the same ID if it exists
+        if sessions.contains_key(&agent_id) {
+            log::warn!("Agent {} reconnected, evicting old session", agent_id);
+            sessions.remove(&agent_id);
+        }
         sessions.insert(
             agent_id.clone(),
             Arc::new(ClientSession {
