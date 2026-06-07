@@ -23,7 +23,7 @@ The system consists of three main components:
 
 ### Prerequisites
 - [Rust](https://rustup.rs/) (latest stable)
-- Windows (required for the Client/Agent component)
+- Windows or Linux (for the Client/Agent component)
 
 ### 1. Build the Workspace
 Clone the repository and build all components:
@@ -176,12 +176,14 @@ All messages are wrapped in a typed envelope:
 - **Graceful Shutdown**: Both client and server implement a 30-second wait period upon receiving a shutdown signal. During this time, the message queue is flushed to ensure that any pending command responses are transmitted before the socket closes.
 
 ### Windows-Specific Implementation
-- **System Information**:
+- **Cross-Platform Implementation**:
   - Uses the `sysinfo` crate for cross-platform metrics.
-  - Invokes `GetComputerNameExW` via `windows-sys` to retrieve the DNS domain name.
+  - On Windows, invokes `GetComputerNameExW` via `windows-sys` to retrieve the DNS domain name.
+  - On Linux, uses `hostname -d` to retrieve the domain name.
   - Collects the top 50 processes by CPU usage to provide actionable telemetry.
 - **Reboot Command**:
-  - Triggers `shutdown /r /t 30` via `std::process::Command`.
+  - On Windows, triggers `shutdown /r /t 30` via `std::process::Command`.
+  - On Linux, triggers `shutdown -r now`.
   - The client is designed to send the `ok` response back to the server *immediately before* executing the shutdown command to avoid connection loss during the response phase.
 
 ---
